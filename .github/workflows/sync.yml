@@ -1,0 +1,31 @@
+name: Xert Azure Sync
+
+on:
+  schedule:
+    - cron: '0 5 * * *'  # Runs daily at 05:00 UTC
+  workflow_dispatch:       # Allows manually triggering a run from the Actions tab
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run sync script
+        env:
+          XERT_USERNAME: ${{ secrets.XERT_USERNAME }}
+          XERT_PASSWORD: ${{ secrets.XERT_PASSWORD }}
+          AZURE_SQL_SERVER: ${{ secrets.AZURE_SQL_SERVER }}
+          AZURE_SQL_USER: ${{ secrets.AZURE_SQL_USER }}
+          AZURE_SQL_PASSWORD: ${{ secrets.AZURE_SQL_PASSWORD }}
+          AZURE_SQL_DATABASE: ${{ secrets.AZURE_SQL_DATABASE }}
+        run: python xert_sync_azure.py
