@@ -1,0 +1,14 @@
+cat > .gitignore << 'EOF'
+.env
+*.env
+__pycache__/
+*.pyc
+.venv/
+venv/
+.DS_Store
+EOF
+
+git add .gitignore xert_sync_azure.py requirements.txt
+git commit -m "Initial sync script"
+git branch -M main
+git push -u origin main
