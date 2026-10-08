@@ -55,6 +55,7 @@ XERT_BASE = "https://www.xertonline.com"
 TOKEN_URL = f"{XERT_BASE}/oauth/token"
 ACTIVITY_LIST_URL = f"{XERT_BASE}/oauth/activity"
 ACTIVITY_DETAIL_URL = f"{XERT_BASE}/oauth/activity/{{path}}"
+TRAINING_INFO_URL = f"{XERT_BASE}/oauth/training_info"
 
 XERT_USERNAME = os.environ.get("XERT_USERNAME")
 XERT_PASSWORD = os.environ.get("XERT_PASSWORD")
@@ -309,6 +310,84 @@ def sync_activities(session, token, conn):
     set_last_synced_unix(conn, to_ts)
 
 
+def build_training_info_row(data, now):
+    """Flatten a /oauth/training_info response into one dict per daily snapshot.
+
+    Every nested lookup tolerates missing keys: when wotd.type is "None",
+    Xert returns only {"type": "None"} with no name/workoutId/etc.
+    """
+    sig = data.get("signature") or {}
+    tl = data.get("tl") or {}
+    target = data.get("targetXSS") or {}
+    wotd = data.get("wotd") or {}
+
+    return {
+        "snapshot_date": now.date().isoformat(),
+        "snapshot_at": now.isoformat(),
+        "status": data.get("status"),
+        "source": data.get("source"),
+        "weight": data.get("weight"),
+        "sig_ftp": sig.get("ftp"),
+        "sig_ltp": sig.get("ltp"),
+        "sig_hie": sig.get("hie"),
+        "sig_pp": sig.get("pp"),
+        "tl_low": tl.get("low"),
+        "tl_high": tl.get("high"),
+        "tl_peak": tl.get("peak"),
+        "tl_total": tl.get("total"),
+        "target_xss_low": target.get("low"),
+        "target_xss_high": target.get("high"),
+        "target_xss_peak": target.get("peak"),
+        "target_xss_total": target.get("total"),
+        "wotd_type": wotd.get("type"),
+        "wotd_name": wotd.get("name"),
+        "wotd_workout_id": wotd.get("workoutId"),
+        "wotd_description": wotd.get("description"),
+        "wotd_difficulty": wotd.get("difficulty"),
+        "wotd_url": wotd.get("url"),
+    }
+
+
+def upsert_daily_training_info(conn, row):
+    # SQL is generated from the dict keys so the column list and the
+    # parameter list can never drift out of sync.
+    cols = [c for c in row if c != "snapshot_date"]
+    update_set = ", ".join(f"{c} = %s" for c in cols)
+    insert_cols = ", ".join(["snapshot_date"] + cols)
+    insert_vals = ", ".join(["%s"] * (len(cols) + 1))
+
+    sql = f"""
+        MERGE INTO daily_training_info AS target
+        USING (SELECT %s AS snapshot_date) AS source
+        ON target.snapshot_date = source.snapshot_date
+        WHEN MATCHED THEN UPDATE SET {update_set}
+        WHEN NOT MATCHED THEN INSERT ({insert_cols}) VALUES ({insert_vals});
+    """
+    params = (
+        [row["snapshot_date"]]
+        + [row[c] for c in cols]
+        + [row["snapshot_date"]]
+        + [row[c] for c in cols]
+    )
+    cursor = conn.cursor()
+    cursor.execute(sql, tuple(params))
+
+
+def sync_training_info(session, token, conn):
+    # /oauth/training_info only returns the *current* state, so history
+    # exists only from the first run onward -- one row per day, rerunning
+    # on the same day updates that day's row instead of adding another.
+    data = api_get(session, token, TRAINING_INFO_URL)
+    row = build_training_info_row(data, datetime.now(timezone.utc))
+    upsert_daily_training_info(conn, row)
+    conn.commit()
+    print(
+        f"Training info snapshot for {row['snapshot_date']}: "
+        f"target XSS total={row['target_xss_total']}, wotd={row['wotd_type']}"
+        + (f" ({row['wotd_name']})" if row["wotd_name"] else "")
+    )
+
+
 def run():
     check_env()
     conn = get_connection()
@@ -318,6 +397,7 @@ def run():
     token = get_access_token(session)
 
     sync_activities(session, token, conn)
+    sync_training_info(session, token, conn)
 
     conn.close()
     print("Sync complete.")
