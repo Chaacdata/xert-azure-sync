@@ -10,8 +10,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
-      XERT_USERNAME: ${{ secrets.XERT_USERNAME }}
-      XERT_PASSWORD: ${{ secrets.XERT_PASSWORD }}
+      XERT_CLIENT_ID: ${{ secrets.XERT_CLIENT_ID }}
+      XERT_CLIENT_SECRET: ${{ secrets.XERT_CLIENT_SECRET }}
       AZURE_SQL_SERVER: ${{ secrets.AZURE_SQL_SERVER }}
       AZURE_SQL_USER: ${{ secrets.AZURE_SQL_USER }}
       AZURE_SQL_PASSWORD: ${{ secrets.AZURE_SQL_PASSWORD }}
