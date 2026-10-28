@@ -8,8 +8,9 @@ This version intentionally leaves out streaming/session data and
 training_status -- those come in a later step once this is working.
 
 Set these environment variables before running:
-    XERT_USERNAME       - your Xert login email
-    XERT_PASSWORD       - your Xert password
+    XERT_CLIENT_ID      - your personal Xert API key (xk_...), from
+                          Xert Account Settings -> Developer
+    XERT_CLIENT_SECRET  - the matching secret (xs_...)
     AZURE_SQL_SERVER     - e.g. chaac-xert.database.windows.net
     AZURE_SQL_USER       - e.g. chaac
     AZURE_SQL_PASSWORD   - your Azure SQL login password
@@ -35,8 +36,23 @@ MAX_RETRIES = 4
 RETRY_BACKOFF_SECONDS = 15  # doubles each attempt: 15s, 30s, 60s, 120s
 
 
+def _retry_after(e):
+    """Seconds Xert asks us to wait after an HTTP 429 (rate limit), else None."""
+    resp = getattr(e, "response", None)
+    if resp is None or resp.status_code != 429:
+        return None
+    try:
+        return max(1, int(resp.headers.get("Retry-After", "60")))
+    except ValueError:
+        return 60
+
+
 def with_retries(func, *args, description="operation", **kwargs):
-    """Call func(*args, **kwargs), retrying on failure with exponential backoff."""
+    """Call func(*args, **kwargs), retrying on failure with exponential backoff.
+
+    When Xert answers 429 (rate limit), wait as long as its Retry-After header
+    says instead of the normal backoff.
+    """
     delay = RETRY_BACKOFF_SECONDS
     last_error = None
     for attempt in range(1, MAX_RETRIES + 1):
@@ -46,9 +62,14 @@ def with_retries(func, *args, description="operation", **kwargs):
             last_error = e
             print(f"  Attempt {attempt}/{MAX_RETRIES} failed for {description}: {e}")
             if attempt < MAX_RETRIES:
-                print(f"  Retrying in {delay}s...")
-                time.sleep(delay)
-                delay *= 2
+                wait = _retry_after(e)
+                if wait is not None:
+                    print(f"  Rate limited by Xert; waiting {wait}s as asked...")
+                    time.sleep(wait)
+                else:
+                    print(f"  Retrying in {delay}s...")
+                    time.sleep(delay)
+                    delay *= 2
     raise last_error
 
 XERT_BASE = "https://www.xertonline.com"
@@ -57,8 +78,11 @@ ACTIVITY_LIST_URL = f"{XERT_BASE}/oauth/activity"
 ACTIVITY_DETAIL_URL = f"{XERT_BASE}/oauth/activity/{{path}}"
 TRAINING_INFO_URL = f"{XERT_BASE}/oauth/training_info"
 
-XERT_USERNAME = os.environ.get("XERT_USERNAME")
-XERT_PASSWORD = os.environ.get("XERT_PASSWORD")
+# Since Xert API 1.7 the old shared login ("xert_public" + your username and
+# password) returns fixed DEMO data, not yours. Your own data needs the personal
+# key and secret from Xert Account Settings -> Developer.
+XERT_CLIENT_ID = os.environ.get("XERT_CLIENT_ID")
+XERT_CLIENT_SECRET = os.environ.get("XERT_CLIENT_SECRET")
 
 AZURE_SQL_SERVER = os.environ.get("AZURE_SQL_SERVER")
 AZURE_SQL_USER = os.environ.get("AZURE_SQL_USER")
@@ -71,8 +95,8 @@ INITIAL_FROM_TS = 1420070400  # Jan 1, 2015
 
 def check_env():
     required = {
-        "XERT_USERNAME": XERT_USERNAME,
-        "XERT_PASSWORD": XERT_PASSWORD,
+        "XERT_CLIENT_ID": XERT_CLIENT_ID,
+        "XERT_CLIENT_SECRET": XERT_CLIENT_SECRET,
         "AZURE_SQL_SERVER": AZURE_SQL_SERVER,
         "AZURE_SQL_USER": AZURE_SQL_USER,
         "AZURE_SQL_PASSWORD": AZURE_SQL_PASSWORD,
@@ -141,12 +165,8 @@ def set_last_synced_unix(conn, ts):
 def _get_access_token(session):
     resp = session.post(
         TOKEN_URL,
-        auth=("xert_public", "xert_public"),
-        data={
-            "grant_type": "password",
-            "username": XERT_USERNAME,
-            "password": XERT_PASSWORD,
-        },
+        auth=(XERT_CLIENT_ID, XERT_CLIENT_SECRET),
+        data={"grant_type": "client_credentials"},
         timeout=30,
     )
     resp.raise_for_status()
